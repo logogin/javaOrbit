@@ -2,6 +2,8 @@ package physics;
 
 import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.RecursiveTask;
 
 /**
  * Celestial.java
@@ -10,6 +12,8 @@ import java.util.List;
  * @author Pavel Danchenko
  */
 public class Celestial {
+
+    private static final ForkJoinPool pool = new ForkJoinPool();
 
     public double mass;
     public Position position;
@@ -69,8 +73,8 @@ public class Celestial {
                 }
                 world.set(i, o1);
             }
-            cleanupWorld(world);
         } while (hasCollisions);
+        cleanupWorld(world);
     }
 
     public void cleanupWorld(List<Celestial> world) {
@@ -121,9 +125,48 @@ public class Celestial {
         return m1 * m2 / (r * r);
     }
 
+    public static class AccumulateForces extends RecursiveTask<Vector> {
+        private final Celestial o;
+        private final List<Celestial> world;
+        private final int start;
+        private final int length;
+
+        public AccumulateForces(Celestial o, List<Celestial> world, int start, int length) {
+            this.o = o;
+            this.world = world;
+            this.start = start;
+            this.length = length;
+        }
+
+        @Override
+        protected Vector compute() {
+            if ( length <= 10 ) {
+                return accumulateForces(o, world, start, length);
+            }
+            int split = length / 2;
+            AccumulateForces f1 = new AccumulateForces(o, world, start, split);
+            AccumulateForces f2 = new AccumulateForces(o, world, start + split, length - split);
+            f2.fork();
+            return Vector.add(f1.compute(), f2.join());
+        }
+
+        public Vector accumulateForces(Celestial o, List<Celestial> world, int start, int length) {
+            Vector force = Vector.make();
+            for ( int i = start; i < length; i++ ) {
+                Celestial obj = world.get(i);
+                if ( o != obj ) {
+                    force = Vector.add(force, forceBetween(o, obj));
+                }
+            }
+            return force;
+        }
+    }
+
     public static void calculateForcesOnAll(List<Celestial> world) {
         for ( Celestial obj : world ) {
-            accumulateForces(obj, world);
+            Vector force = pool.invoke(new AccumulateForces(obj, world, 0, world.size()));
+            obj.force = force;
+            //accumulateForces(obj, world);
         }
     }
 
